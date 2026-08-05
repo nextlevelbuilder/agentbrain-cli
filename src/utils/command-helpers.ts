@@ -12,6 +12,7 @@ export function createClient(cmd: Command): { client: ApiClient; config: AgentBr
   const config = getConfig({
     apiUrl: opts.apiUrl,
     apiKey: opts.apiKey,
+    token: opts.token,
     orgId: opts.org,
   });
   const client = new ApiClient(config, opts.verbose);
@@ -57,4 +58,34 @@ export async function fetchAndPrint<T>(
   const format = getOutputFormat(cmd);
   const data = await fetcher(client);
   printOutput(data, format, columns);
+}
+
+// Run a mutating call that returns nothing meaningful; print a confirmation line.
+export async function runAction(
+  cmd: Command,
+  action: (client: ApiClient) => Promise<unknown>,
+  successMessage: string
+): Promise<void> {
+  const { client } = createClient(cmd);
+  await action(client);
+  console.log(successMessage);
+}
+
+// Parse a JSON string CLI option into an object, with a friendly error.
+export function parseJsonOption(value: string | undefined, flagName: string): unknown {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`Invalid JSON for ${flagName}: ${value}`);
+  }
+}
+
+// Drop keys whose value is undefined so PATCH/PUT bodies only carry set fields.
+export function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k as keyof T] = v as T[keyof T];
+  }
+  return out;
 }

@@ -14,7 +14,7 @@ export class ApiError extends Error {
 export function formatApiError(err: ApiError): string {
   switch (err.statusCode) {
     case 401:
-      return `Authentication failed: ${err.apiMessage}\nRun: agentbrain config set apiKey <your-api-key>`;
+      return `Authentication failed: ${err.apiMessage}\nAdmin (/cms) endpoints need a bearer token: agentbrain config set token <jwt>\nMCP (/mcp) endpoints need an API key: agentbrain config set apiKey <key>`;
     case 403:
       return `Permission denied: ${err.apiMessage}\nCheck your organization access or API key permissions.`;
     case 404:

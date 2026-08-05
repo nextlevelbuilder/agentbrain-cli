@@ -4,9 +4,9 @@ import { QueryLog } from "../types/api-types.js";
 
 const LOG_COLUMNS = [
   { key: "id", header: "ID" },
-  { key: "executed_by", header: "User" },
-  { key: "query_text", header: "Query", transform: (v: unknown) => String(v).slice(0, 60) },
-  { key: "execution_time_ms", header: "Time (ms)" },
+  { key: "userId", header: "User" },
+  { key: "sqlQuery", header: "Query", transform: (v: unknown) => String(v).slice(0, 60) },
+  { key: "executionTimeMs", header: "Time (ms)" },
   { key: "status", header: "Status" },
 ];
 
@@ -17,13 +17,13 @@ export function registerQueryLogCommand(program: Command): void {
     .command("list")
     .description("List query logs")
     .action(withErrorHandler(async (cmd) => {
-      await fetchAndPrint<QueryLog[]>(cmd, (c) => c.get("/query-logs"), LOG_COLUMNS);
+      await fetchAndPrint<QueryLog[]>(cmd, (c) => c.get("/cms/query-logs"), LOG_COLUMNS);
     }));
 
   ql
     .command("get <id>")
     .description("Get query log details")
     .action(withErrorHandler(async (cmd, id) => {
-      await fetchAndPrint<QueryLog>(cmd, (c) => c.get(`/query-logs/${id}`));
+      await fetchAndPrint<QueryLog>(cmd, (c) => c.get(`/cms/query-logs/${id}`));
     }));
 }

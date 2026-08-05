@@ -17,14 +17,14 @@ export function registerTagCommand(program: Command): void {
     .command("list")
     .description("List all tags")
     .action(withErrorHandler(async (cmd) => {
-      await fetchAndPrint<Tag[]>(cmd, (c) => c.get("/tags"), TAG_COLUMNS);
+      await fetchAndPrint<Tag[]>(cmd, (c) => c.get("/cms/tags"), TAG_COLUMNS);
     }));
 
   tag
     .command("get <id>")
     .description("Get tag details")
     .action(withErrorHandler(async (cmd, id) => {
-      await fetchAndPrint<Tag>(cmd, (c) => c.get(`/tags/${id}`));
+      await fetchAndPrint<Tag>(cmd, (c) => c.get(`/cms/tags/${id}`));
     }));
 
   tag
@@ -34,7 +34,7 @@ export function registerTagCommand(program: Command): void {
     .option("--color <hex>", "Tag color (hex)")
     .action(withErrorHandler(async (cmd) => {
       const opts = cmd.opts();
-      await fetchAndPrint<Tag>(cmd, (c) => c.post("/tags", {
+      await fetchAndPrint<Tag>(cmd, (c) => c.post("/cms/tags", {
         name: opts.name,
         color: opts.color,
       }));
@@ -47,7 +47,7 @@ export function registerTagCommand(program: Command): void {
     .option("--color <hex>", "New color")
     .action(withErrorHandler(async (cmd, id) => {
       const opts = cmd.opts();
-      await fetchAndPrint<Tag>(cmd, (c) => c.put(`/tags/${id}`, {
+      await fetchAndPrint<Tag>(cmd, (c) => c.put(`/cms/tags/${id}`, {
         name: opts.name,
         color: opts.color,
       }));
@@ -58,7 +58,7 @@ export function registerTagCommand(program: Command): void {
     .description("Delete a tag")
     .action(withErrorHandler(async (cmd, id) => {
       const { client } = createClient(cmd);
-      await client.delete(`/tags/${id}`);
+      await client.delete(`/cms/tags/${id}`);
       console.log("Tag deleted.");
     }));
 }
