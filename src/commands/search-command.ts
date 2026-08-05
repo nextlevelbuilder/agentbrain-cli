@@ -10,7 +10,7 @@ export function registerSearchCommand(program: Command): void {
     .option("--limit <n>", "Max results per type", "10")
     .action(withErrorHandler(async (cmd) => {
       const opts = cmd.opts();
-      await fetchAndPrint(cmd, (c) => c.post("/search", {
+      await fetchAndPrint(cmd, (c) => c.post("/cms/search", {
         query: opts.query,
         types: opts.types?.split(","),
         limit: parseInt(opts.limit, 10),

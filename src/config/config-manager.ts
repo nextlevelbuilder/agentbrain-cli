@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AgentBrainConfig, DEFAULT_CONFIG, ENV_VAR_MAP, VALID_CONFIG_KEYS } from "./config-schema.js";
+import { AgentBrainConfig, DEFAULT_CONFIG, ENV_VAR_MAP, VALID_CONFIG_KEYS, SECRET_CONFIG_KEYS } from "./config-schema.js";
 
 const CONFIG_DIR = join(homedir(), ".agentbrain");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
@@ -99,9 +99,9 @@ export function listConfig(): Array<{ key: string; value: string; source: string
       value = String(envConfig[key as keyof typeof envConfig]);
     }
 
-    // Mask API key for display
-    if (key === "apiKey" && value && value.length > 8) {
-      value = value.slice(0, 4) + "****" + value.slice(-4);
+    // Mask secret values (API key, JWT token) for display
+    if (SECRET_CONFIG_KEYS.includes(key) && value) {
+      value = value.length > 8 ? value.slice(0, 4) + "****" + value.slice(-4) : "****";
     }
 
     return { key, value, source };

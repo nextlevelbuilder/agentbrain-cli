@@ -6,6 +6,7 @@ export interface GlobalOptions {
   org?: string;
   apiUrl?: string;
   apiKey?: string;
+  token?: string;
   verbose?: boolean;
 }
 
@@ -14,7 +15,8 @@ export function addGlobalOptions(program: Command): void {
     .option("-o, --output <format>", "Output format: json | table | yaml")
     .option("--org <id>", "Override organization ID")
     .option("--api-url <url>", "Override API base URL")
-    .option("--api-key <key>", "Override API key")
+    .option("--api-key <key>", "Override API key (X-API-Key, for /mcp endpoints)")
+    .option("--token <jwt>", "Override bearer token (Authorization, for /cms admin endpoints)")
     .option("-v, --verbose", "Verbose output");
 }
 
@@ -26,6 +28,7 @@ export function getGlobalOptions(cmd: Command): GlobalOptions {
     org: root.org,
     apiUrl: root.apiUrl,
     apiKey: root.apiKey,
+    token: root.token,
     verbose: root.verbose,
   };
 }

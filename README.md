@@ -1,8 +1,8 @@
 # AgentBrain CLI
 
-TypeScript command-line tool for interacting with AgentBrain enterprise data hub API.
+TypeScript command-line tool for interacting with the AgentBrain enterprise data hub API.
 
-Manage organizations, connectors, knowledge bases, workflows, permissions, and more from the terminal.
+Full-coverage admin CLI: manage organizations, connectors, knowledge bases, documents/media, workflows, the knowledge graph, permissions, LLM/prompt config, cost & usage, audit logs, and system settings — all from the terminal. It covers the same backend surface as the AgentBrain MCP server plus the broader CMS admin API.
 
 ## Installation
 
@@ -20,156 +20,204 @@ pnpm add -g agentbrain
 
 Requires Node 20+.
 
+## Authentication model
+
+AgentBrain uses **two credentials** depending on which surface you call:
+
+| Surface | Commands | Credential |
+| --- | --- | --- |
+| Admin / CMS (default) | Almost everything | **Bearer JWT** — config key `token` |
+| MCP surface | `retrieve-context`, `connector query`, `connector execute`, `governance ai-policy` | **API key** — config key `apiKey` |
+
+Every request also sends your organization ID (`orgId`) as the `X-Org-Id` header.
+
+> **Breaking change (upgrading from an apiKey-only setup):** admin/CMS commands now require a **bearer token** (`token`), not the API key. The API key still authenticates the MCP-surface commands listed above. If you previously configured only `apiKey`, set `token` as well:
+>
+> ```bash
+> agentbrain config set token <your-jwt>
+> ```
+
 ## Quick Start
 
 ### Option 1: Interactive Setup (Recommended)
-
-Run the interactive setup wizard:
 
 ```bash
 agentbrain config init
 ```
 
-This prompts you for:
-- API URL (default: https://api.agentbrain.sh for cloud, custom for on-premise)
-- API Key
-- Default Organization ID (optional)
+The wizard prompts for API URL, a bearer token (JWT, for admin/CMS commands), an optional API key (only for MCP-surface commands), and a default organization ID. Choose cloud `https://api.agentbrain.sh` or a custom on-premise URL.
 
 ### Option 2: Manual Configuration
 
-Set your API credentials via commands:
-
 ```bash
-agentbrain config set apiKey sk_live_xxxxx
+# Admin/CMS surface (most commands): bearer JWT
+agentbrain config set token <your-jwt>
 agentbrain config set apiUrl https://api.agentbrain.sh
 agentbrain config set orgId org_xxxxx
+
+# MCP surface (only for `agentbrain mcp *`): API key
+agentbrain config set apiKey sk_live_xxxxx
 ```
 
 ### Verify Setup
 
 ```bash
-agentbrain org me
+agentbrain me get
+```
+
+## Uploading documents & media
+
+Upload runs the AgentBrain 3-step flow automatically: **presign → PUT the raw bytes to storage → commit**. Kind (`raw_doc`/`image`/`audio`/`video`) and content-type are auto-detected from the file extension; a client-side `sha256` is computed for integrity (auto-skipped for very large files). Max size 500MB.
+
+```bash
+# Upload a document (auto-detects kind/content-type)
+agentbrain media upload ./report.pdf
+
+# Upload into a folder, overriding kind/content-type
+agentbrain media upload ./notes.txt --folder-id fld_xxx --kind raw_doc --content-type text/plain
+
+# Skip client-side sha256 (e.g. for large files)
+agentbrain media upload ./big-video.mp4 --no-sha256
+
+# Manage uploaded assets
+agentbrain media list --folder-id fld_xxx --kind raw_doc
+agentbrain media get <id>
+agentbrain media update <id> --file-name "renamed.pdf" --folder-id fld_yyy
+agentbrain media download-url <id>        # presigned GET URL
+agentbrain media preview <id>             # structured preview
+agentbrain media transcribe <id>          # audio/video transcription
+agentbrain media delete <id>
+agentbrain media bulk-delete --ids id1,id2,id3
 ```
 
 ## Usage
 
+The CLI groups commands by domain. Run `agentbrain --help` for the full list, or `agentbrain <group> --help` for a group.
+
 ### Organizations
 
 ```bash
-# List all organizations
 agentbrain org list
-
-# Get organization details
 agentbrain org get <id>
-
-# Create organization
 agentbrain org create --name "Acme Corp" --type "enterprise"
-
-# Switch active organization
 agentbrain org switch org_xxxxx
 
-# Manage members
+# Members
 agentbrain org members <id>
 agentbrain org add-member <orgId> --user-id user_xxxxx --role admin
+agentbrain org update-member-role <orgId> <memberId> --role admin
+agentbrain org remove-member <orgId> <memberId>
 ```
 
 ### Connectors
 
 ```bash
-# List connectors
 agentbrain connector list
-
-# Get connector details
 agentbrain connector get <id>
-
-# Create connector
 agentbrain connector create --name "PostgreSQL" --type postgres --subtype standard
-
-# Test connector
 agentbrain connector test <id> --config '{...}'
 
-# Inspect databases, schemas, tables
+# Inspect data sources
 agentbrain connector databases <id>
 agentbrain connector schemas <id> --database mydb
 agentbrain connector tables <id> --database mydb --schema public
 
-# Share connector
-agentbrain connector share create <id> --user-id user_xxxxx
+# Sharing (share with a user, then optionally revoke)
+agentbrain connector share create <id> --user-id user_xxxxx --permission read
+agentbrain connector share list <id>
+agentbrain connector share delete <id> <userId>
 ```
 
 ### Knowledge Bases
 
 ```bash
-# List knowledge bases
 agentbrain knowledge list
-
-# Get knowledge base
 agentbrain knowledge get <id>
-
-# Create knowledge base
+agentbrain knowledge by-slug <slug>
 agentbrain knowledge create --title "Product Docs"
 
-# Manage versions
+# Publishing & relationships
+agentbrain knowledge publish <id>
+agentbrain knowledge unpublish <id>
+agentbrain knowledge related <id>
+
+# Versions
 agentbrain knowledge versions <id>
 agentbrain knowledge version <id> <versionId>
 agentbrain knowledge rollback <id> <versionId>
+
+# Public share link
+agentbrain knowledge share <id> --expires-in 86400 --max-access-count 50
+```
+
+### Documents & Media
+
+See [Uploading documents & media](#uploading-documents--media) above, plus background jobs and org media settings:
+
+```bash
+agentbrain media job list
+agentbrain media settings get
 ```
 
 ### Workflows
 
 ```bash
-# List workflows
 agentbrain workflow list
-
-# Create workflow
 agentbrain workflow create --name "ETL Job" --cron "0 0 * * *"
 
-# Manage steps
+# Steps
 agentbrain workflow steps list <id>
-agentbrain workflow steps create <id> --operator transform --config '{...}'
+agentbrain workflow steps create <id> --step-type transform --step-name "clean" --step-order 1
 
 # Execute and monitor
 agentbrain workflow run <id>
 agentbrain workflow runs <id>
 agentbrain workflow logs <id> <runId>
-
-# Cancel running workflow
 agentbrain workflow cancel <id> <runId>
+```
+
+### Knowledge Graph
+
+```bash
+agentbrain kg entity list
+agentbrain kg relation list
+agentbrain kg graph summary --include-orphaned     # also: top | community <id> | neighbors <entityId>
+agentbrain kg extraction status
+agentbrain kg taxonomy list
 ```
 
 ### Permissions
 
 ```bash
-# List permission groups
-agentbrain permission-group list
-
-# Create permission group
+agentbrain permission-group list                 # alias: pg
 agentbrain permission-group create --name "Analysts"
+agentbrain permission-group users <groupId>
+agentbrain permission-group table-perm list <groupId>
 
-# Add rules
-agentbrain permission-group rules create <groupId> --action read --resource connector
+# Resource-level checks (current user)
+agentbrain permission check --resource-type connector --resource-id conn_xxx --action read
 
-# Verify permissions
-agentbrain permission-group verify-permission <groupId> --action write --resource knowledge
+# Verify the effective table-ACL decision (top-level command)
+agentbrain verify-permission \
+  --connector-id conn_xxx --table-pattern "payments.*" --action can_select
 ```
 
-### Other Commands
+### Other Command Groups
 
 ```bash
-# Categories
-agentbrain category list
-agentbrain category tree
-
-# Tags
+agentbrain category list                 # + category tree
+agentbrain folder list
 agentbrain tag list
-agentbrain tag create --name "production"
-
-# Search across entities
 agentbrain search --query "my-connector"
-
-# Query logs
 agentbrain query-log list
-agentbrain query-log get <id>
+agentbrain llm provider list             # LLM provider config
+agentbrain prompt template list          # prompt templates
+agentbrain cost budget get               # cost budget & spend
+agentbrain usage metrics summary         # usage metrics
+agentbrain dashboard summary             # dashboard aggregates
+agentbrain audit list                    # audit logs
+agentbrain system health                 # platform system status
+agentbrain retrieve-context --question "..."   # MCP context retrieval (uses apiKey)
 ```
 
 ## Configuration
@@ -178,26 +226,27 @@ Config stored at `~/.agentbrain/config.json` (mode 0600 for security).
 
 Resolution order (highest to lowest priority):
 
-1. CLI flags (`--api-key`, `--api-url`, `--org`, `--output`)
-2. Environment variables (`AGENTBRAIN_API_KEY`, `AGENTBRAIN_API_URL`, etc.)
+1. CLI flags (`--token`, `--api-key`, `--api-url`, `--org`, `--output`)
+2. Environment variables (`AGENTBRAIN_TOKEN`, `AGENTBRAIN_API_KEY`, `AGENTBRAIN_API_URL`, …)
 3. Config file (`~/.agentbrain/config.json`)
 4. Defaults
 
-View current config:
+View / edit config:
 
 ```bash
-agentbrain config list
-agentbrain config get apiKey
+agentbrain config list          # secrets (token, apiKey) are masked
+agentbrain config get token
 agentbrain config set timeout 60000
 ```
 
 Supported config keys:
 
-- `apiUrl` - API endpoint (default: https://api.agentbrain.sh)
-- `apiKey` - API authentication key
-- `orgId` - Default organization ID
-- `output` - Output format: json, table, yaml (default: table for TTY, json for pipes)
-- `timeout` - Request timeout in ms (default: 30000)
+- `apiUrl` — API endpoint (default: https://api.agentbrain.sh)
+- `token` — bearer JWT for admin/CMS commands
+- `apiKey` — API key for MCP-surface commands (`retrieve-context`, `connector query`/`execute`, `governance ai-policy`)
+- `orgId` — default organization ID
+- `output` — output format: json, table, yaml (default: table for TTY, json for pipes)
+- `timeout` — request timeout in ms (default: 30000)
 
 ## Output Formats
 
@@ -220,21 +269,16 @@ All commands support:
 
 ```bash
 --api-url <url>      Override API endpoint
---api-key <key>      Override API key
+--token <jwt>        Override bearer token (admin/CMS)
+--api-key <key>      Override API key (mcp)
 --org <id>           Override organization ID
 --output <fmt>       Output format: json, table, yaml
---verbose            Enable request logging
+--verbose            Enable request logging (presigned URL signatures are redacted)
 ```
 
 ## Error Handling
 
-Errors include:
-
-- HTTP status code (4xx, 5xx)
-- Error message from API
-- Full response data in verbose mode (`--verbose`)
-
-Example:
+Errors include the HTTP status code, the API error message, and full response data in verbose mode (`--verbose`).
 
 ```bash
 agentbrain org get invalid-id 2>&1
@@ -242,8 +286,6 @@ agentbrain org get invalid-id 2>&1
 ```
 
 ## Development
-
-Clone and build:
 
 ```bash
 git clone https://github.com/nextlevelbuilder/agentbrain-cli
