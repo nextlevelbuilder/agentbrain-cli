@@ -9,6 +9,8 @@ function cfg(over: Partial<AgentBrainConfig> = {}): AgentBrainConfig {
     apiKey: "",
     token: "",
     orgId: "",
+    authUrl: "https://auth.example.test",
+    tenantId: "",
     output: "json",
     timeout: 5000,
     ...over,

@@ -31,11 +31,21 @@ AgentBrain uses **two credentials** depending on which surface you call:
 
 Every request also sends your organization ID (`orgId`) as the `X-Org-Id` header.
 
-> **Breaking change (upgrading from an apiKey-only setup):** admin/CMS commands now require a **bearer token** (`token`), not the API key. The API key still authenticates the MCP-surface commands listed above. If you previously configured only `apiKey`, set `token` as well:
->
-> ```bash
-> agentbrain config set token <your-jwt>
-> ```
+> **Breaking change (upgrading from an apiKey-only setup):** admin/CMS commands now require a **bearer token** (`token`), not the API key. The API key still authenticates the MCP-surface commands listed above. If you previously configured only `apiKey`, set `token` as well.
+
+The bearer JWT is short-lived, so instead of pasting it manually use `agentbrain login` to fetch and store one:
+
+```bash
+agentbrain login                 # prompts for email + password (password hidden)
+agentbrain login --email you@example.com
+```
+
+`login` authenticates against the **Builder Auth** service — a separate service from the hub `apiUrl` — and saves the returned JWT to `token` (file mode `0600`). It needs two settings, resolvable from config, env, or flags:
+
+- `authUrl` — Builder Auth base URL (defaults to the cloud auth service; `--auth-url` / `AGENTBRAIN_AUTH_URL` to override)
+- `tenantId` — your deployment's tenant ID (`--tenant` / `AGENTBRAIN_TENANT_ID`; prompted if unset)
+
+When the JWT expires (admin commands start returning `401 Missing/invalid bearer token`), just re-run `agentbrain login`. Username-based deployments use `agentbrain login --username <name>`.
 
 ## Quick Start
 
@@ -242,9 +252,11 @@ agentbrain config set timeout 60000
 Supported config keys:
 
 - `apiUrl` — API endpoint (default: https://api.agentbrain.sh)
-- `token` — bearer JWT for admin/CMS commands
+- `token` — bearer JWT for admin/CMS commands (set automatically by `agentbrain login`)
 - `apiKey` — API key for MCP-surface commands (`retrieve-context`, `connector query`/`execute`, `governance ai-policy`)
 - `orgId` — default organization ID
+- `authUrl` — Builder Auth service base URL used by `agentbrain login` (default: cloud auth service)
+- `tenantId` — Builder Auth tenant ID used by `agentbrain login`
 - `output` — output format: json, table, yaml (default: table for TTY, json for pipes)
 - `timeout` — request timeout in ms (default: 30000)
 
