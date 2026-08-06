@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { detectContentType, detectKind, uploadMedia, MAX_UPLOAD_BYTES } from "./media-upload.js";
+import { detectContentType, detectKind, uploadMedia, MAX_UPLOAD_BYTES, commitTimeoutMs } from "./media-upload.js";
 import type { ApiClient } from "../client/http-client.js";
+import { ApiError } from "../client/api-error.js";
 
 describe("detectContentType", () => {
   it("maps known extensions", () => {
@@ -106,6 +107,53 @@ describe("uploadMedia orchestration", () => {
   it("rejects a missing file", async () => {
     const fakeClient = { post: async () => ({}), putAbsoluteBytes: async () => {} } as unknown as ApiClient;
     await expect(uploadMedia(fakeClient, { filePath: "/no/such/file.pdf" })).rejects.toThrow(/File not found/);
+  });
+
+  it("passes a size-scaled timeout to the commit request", async () => {
+    let commitOpts: { timeoutMs?: number } | undefined;
+    const fakeClient = {
+      post: async (path: string, _body: unknown, opts?: { timeoutMs?: number }) => {
+        if (path.endsWith("/presign")) {
+          return { assetId: "a", putUrl: "https://x/y", expiresAt: "", fields: {} };
+        }
+        commitOpts = opts;
+        return { assetId: "a", status: "ready", objectKey: "k" };
+      },
+      putAbsoluteBytes: async () => {},
+    } as unknown as ApiClient;
+
+    await uploadMedia(fakeClient, { filePath, computeSha256: false });
+    // Small fixture → floor applies; must be well above the default 30s request timeout.
+    expect(commitOpts?.timeoutMs).toBe(commitTimeoutMs(Buffer.byteLength(fileBody)));
+    expect(commitOpts?.timeoutMs).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("treats a 409 commit as success, reusing the echoed asset payload", async () => {
+    const fakeClient = {
+      post: async (path: string) => {
+        if (path.endsWith("/presign")) {
+          return { assetId: "dup", putUrl: "https://x/y", expiresAt: "", fields: {} };
+        }
+        throw new ApiError(409, "already committed", {
+          data: { assetId: "dup", status: "ready", objectKey: "org/dup.pdf" },
+        });
+      },
+      putAbsoluteBytes: async () => {},
+    } as unknown as ApiClient;
+
+    const result = await uploadMedia(fakeClient, { filePath, computeSha256: false });
+    expect(result.status).toBe("ready");
+    expect(result.objectKey).toBe("org/dup.pdf");
+  });
+});
+
+describe("commitTimeoutMs", () => {
+  it("applies a floor for small files", () => {
+    expect(commitTimeoutMs(1_000)).toBe(60_000);
+  });
+  it("scales with size for large media", () => {
+    // 300MB → 300 * 1000ms = 300s, comfortably above the observed ~50s probe time.
+    expect(commitTimeoutMs(300_000_000)).toBe(300_000);
   });
 });
 
