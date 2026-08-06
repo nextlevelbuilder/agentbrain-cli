@@ -6,7 +6,7 @@ import { buildProgram } from "./program.js";
 // group is intentionally added/removed.
 const EXPECTED_GROUPS = [
   // existing
-  "config", "login", "org", "connector", "connector-subtype", "knowledge", "workflow",
+  "config", "auth", "org", "connector", "connector-subtype", "knowledge", "workflow",
   "search", "query-log", "permission-group", "permission", "verify-permission",
   "category", "tag",
   // parity additions

@@ -72,6 +72,30 @@ export function setConfigValue(key: string, value: string): void {
   chmodSync(CONFIG_FILE, 0o600);
 }
 
+// Remove one or more keys from the config file. Silently no-ops when the
+// config file does not exist yet. Used by `auth logout` to wipe stored tokens.
+export function unsetConfigValues(keys: string[]): void {
+  for (const key of keys) {
+    if (!VALID_CONFIG_KEYS.includes(key as keyof AgentBrainConfig)) {
+      throw new Error(`Invalid config key: "${key}". Valid keys: ${VALID_CONFIG_KEYS.join(", ")}`);
+    }
+  }
+  if (!existsSync(CONFIG_FILE)) return;
+
+  const config = loadConfigFile();
+  let mutated = false;
+  for (const key of keys) {
+    if (key in config) {
+      delete (config as Record<string, unknown>)[key];
+      mutated = true;
+    }
+  }
+  if (!mutated) return;
+
+  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  chmodSync(CONFIG_FILE, 0o600);
+}
+
 // Get a single config value (resolved)
 export function getConfigValue(key: string): string {
   if (!VALID_CONFIG_KEYS.includes(key as keyof AgentBrainConfig)) {

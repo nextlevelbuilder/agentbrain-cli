@@ -1,5 +1,16 @@
 import { AgentBrainConfig } from "../config/config-schema.js";
 import { ApiError } from "./api-error.js";
+import { refresh as refreshAuth } from "./auth-client.js";
+
+// Callback fired after a silent refresh so the caller can persist the rotated
+// token pair (Builder Auth rotates refresh tokens on every /auth/refresh, so
+// dropping the new value strands the CLI on the next expiry). Injected via the
+// options bag rather than imported to keep ApiClient testable without hitting
+// the real config file.
+export interface ApiClientOptions {
+  verbose?: boolean;
+  onTokenRefreshed?: (tokens: { accessToken: string; refreshToken: string }) => void;
+}
 
 // Path prefixes the CLI is allowed to call. Everything routes under /v1/<prefix>.
 const KNOWN_PREFIXES = ["/cms", "/mcp", "/system", "/orgs", "/permissions", "/me", "/users"] as const;
@@ -16,19 +27,32 @@ export class ApiClient {
   private baseUrl: string;
   private apiKey: string;
   private token: string;
+  private refreshToken: string;
+  private authUrl: string;
+  private tenantId: string;
   private orgId: string;
   private timeout: number;
   private verbose: boolean;
+  private onTokenRefreshed?: (tokens: { accessToken: string; refreshToken: string }) => void;
 
-  constructor(config: AgentBrainConfig, verbose = false) {
+  // Accepts either the legacy `verbose` boolean or an options bag. Kept
+  // backward-compatible so existing `new ApiClient(config)` / `new
+  // ApiClient(config, true)` callers keep working unchanged.
+  constructor(config: AgentBrainConfig, options: boolean | ApiClientOptions = false) {
     // Base is the API version root. Commands pass the full sub-path, e.g.
     // "/cms/folders", "/mcp/retrieve-context", "/system/users", "/permissions/verify".
     this.baseUrl = `${config.apiUrl.replace(/\/$/, "")}/v1`;
     this.apiKey = config.apiKey;
     this.token = config.token;
+    this.refreshToken = config.refreshToken;
+    this.authUrl = config.authUrl;
+    this.tenantId = config.tenantId;
     this.orgId = config.orgId;
     this.timeout = config.timeout;
-    this.verbose = verbose;
+
+    const opts: ApiClientOptions = typeof options === "boolean" ? { verbose: options } : options;
+    this.verbose = opts.verbose ?? false;
+    this.onTokenRefreshed = opts.onTokenRefreshed;
   }
 
   async get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -192,52 +216,69 @@ export class ApiClient {
 
   private async request<T>(method: string, path: string, body?: unknown, params?: Record<string, string>): Promise<T> {
     const url = this.buildUrl(path, params);
+    const bodyStr = body ? JSON.stringify(body) : undefined;
+
+    let response = await this.doFetch(method, url, path, bodyStr);
+
+    // On 401 for a bearer-auth path, try one silent refresh + retry. The
+    // refresh path itself is gated: we only attempt it when a refreshToken +
+    // auth service coordinates are configured, otherwise there is no way to
+    // recover and we surface the original 401 verbatim.
+    if (response.status === 401 && !isMcpPath(path) && this.canRefresh()) {
+      const refreshed = await this.tryRefresh();
+      if (refreshed) {
+        response = await this.doFetch(method, url, path, bodyStr);
+      }
+    }
+
+    return this.parseResponse<T>(response);
+  }
+
+  private canRefresh(): boolean {
+    return Boolean(this.refreshToken && this.authUrl && this.tenantId);
+  }
+
+  // Attempt to rotate tokens once. Returns true on success, false when refresh
+  // itself fails — that failure is swallowed so the caller re-surfaces the
+  // original 401 with its actionable "run `agentbrain auth login`" message.
+  private async tryRefresh(): Promise<boolean> {
+    if (this.verbose) console.error("401 → attempting silent token refresh");
+    try {
+      const result = await refreshAuth({
+        authUrl: this.authUrl,
+        tenantId: this.tenantId,
+        refreshToken: this.refreshToken,
+        timeout: this.timeout,
+      });
+      this.token = result.accessToken;
+      // Builder Auth rotates refresh tokens; fall back to reusing the old one
+      // only if the response omitted the field (defensive — spec says it's
+      // always returned).
+      if (result.refreshToken) this.refreshToken = result.refreshToken;
+      this.onTokenRefreshed?.({ accessToken: this.token, refreshToken: this.refreshToken });
+      return true;
+    } catch (err) {
+      if (this.verbose) console.error(`Silent refresh failed: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  private async doFetch(method: string, url: string, path: string, body: string | undefined): Promise<Response> {
     const headers = { ...this.baseHeaders(), ...this.authHeaders(path) };
     const start = Date.now();
 
-    if (this.verbose) {
-      console.error(`${method} ${url}`);
-    }
+    if (this.verbose) console.error(`${method} ${url}`);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     try {
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      const duration = Date.now() - start;
-
+      const response = await fetch(url, { method, headers, body, signal: controller.signal });
       if (this.verbose) {
+        const duration = Date.now() - start;
         console.error(`${response.status} ${response.statusText} (${duration}ms)`);
       }
-
-      const text = await response.text();
-      let data: unknown;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-
-      if (!response.ok) {
-        const msg = (data as Record<string, unknown>)?.error ??
-          (data as Record<string, unknown>)?.message ??
-          response.statusText;
-        throw new ApiError(response.status, String(msg), data);
-      }
-
-      // Unwrap envelope if present: { data: T } -> T
-      if (data && typeof data === "object" && "data" in (data as Record<string, unknown>)) {
-        return (data as Record<string, unknown>).data as T;
-      }
-      return data as T;
+      return response;
     } catch (err) {
-      if (err instanceof ApiError) throw err;
       if ((err as Error).name === "AbortError") {
         throw new ApiError(408, `Request timed out after ${this.timeout}ms`);
       }
@@ -245,5 +286,28 @@ export class ApiClient {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private async parseResponse<T>(response: Response): Promise<T> {
+    const text = await response.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+
+    if (!response.ok) {
+      const msg = (data as Record<string, unknown>)?.error ??
+        (data as Record<string, unknown>)?.message ??
+        response.statusText;
+      throw new ApiError(response.status, String(msg), data);
+    }
+
+    // Unwrap envelope if present: { data: T } -> T
+    if (data && typeof data === "object" && "data" in (data as Record<string, unknown>)) {
+      return (data as Record<string, unknown>).data as T;
+    }
+    return data as T;
   }
 }

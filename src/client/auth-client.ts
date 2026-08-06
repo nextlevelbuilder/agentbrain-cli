@@ -22,6 +22,20 @@ export interface LoginResult {
   expiresIn?: number;
 }
 
+export interface RefreshParams {
+  authUrl: string;
+  tenantId: string;
+  refreshToken: string;
+  timeout: number;
+}
+
+export interface LogoutParams {
+  authUrl: string;
+  tenantId: string;
+  accessToken: string;
+  timeout: number;
+}
+
 // Auth service envelopes the token payload as { data: { accessToken, ... } };
 // tolerate a flat shape too so a future/alternate deployment still works.
 interface AuthTokenBody {
@@ -91,6 +105,99 @@ export async function login(params: LoginParams): Promise<LoginResult> {
     if (err instanceof ApiError) throw err;
     if ((err as Error).name === "AbortError") {
       throw new ApiError(408, `Login request timed out after ${params.timeout}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Exchange a refresh token for a new access-token pair. Builder Auth *rotates*
+// refresh tokens — every successful call invalidates the old refreshToken and
+// returns a fresh one, so callers MUST persist both fields from the result.
+export async function refresh(params: RefreshParams): Promise<LoginResult> {
+  const base = params.authUrl.replace(/\/$/, "");
+  const url = `${base}/v1/auth/refresh`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), params.timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Tenant-ID": params.tenantId,
+      },
+      body: JSON.stringify({ refreshToken: params.refreshToken }),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let data: AuthTokenBody | string;
+    try {
+      data = JSON.parse(text) as AuthTokenBody;
+    } catch {
+      data = text;
+    }
+
+    if (!response.ok) {
+      const msg =
+        (typeof data === "object" && (data.message ?? data.data?.message)) ||
+        response.statusText ||
+        "Token refresh failed";
+      throw new ApiError(response.status, String(msg), data);
+    }
+
+    const payload = typeof data === "object" ? data.data ?? data : {};
+    const accessToken = payload.accessToken;
+    if (!accessToken) {
+      throw new ApiError(500, "Auth service returned no access token on refresh", data);
+    }
+
+    return {
+      accessToken,
+      refreshToken: payload.refreshToken,
+      expiresIn: payload.expiresIn,
+    };
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if ((err as Error).name === "AbortError") {
+      throw new ApiError(408, `Refresh request timed out after ${params.timeout}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Revoke the current access token server-side. Best-effort — callers should
+// always clear local tokens even when this rejects, since network issues must
+// not strand a user with an unlogoutable session.
+export async function logout(params: LogoutParams): Promise<void> {
+  const base = params.authUrl.replace(/\/$/, "");
+  const url = `${base}/v1/auth/logout`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), params.timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        "X-Tenant-ID": params.tenantId,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, `Logout failed: ${response.statusText}`);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if ((err as Error).name === "AbortError") {
+      throw new ApiError(408, `Logout request timed out after ${params.timeout}ms`);
     }
     throw err;
   } finally {

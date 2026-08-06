@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { login } from "./auth-client.js";
+import { login, refresh, logout } from "./auth-client.js";
 import { ApiError } from "./api-error.js";
 
 function mockFetch(body: unknown, ok = true, status = 200) {
@@ -64,5 +64,49 @@ describe("auth-client login", () => {
     const fn = mockFetch({ data: { accessToken: "t" } });
     await login({ ...base, authUrl: "https://auth.example.test/", mode: "email", identifier: "a@b.co", password: "pw" });
     expect(fn.mock.calls[0][0]).toBe("https://auth.example.test/v1/auth/login/email");
+  });
+});
+
+describe("auth-client refresh", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs the refreshToken and returns a rotated pair", async () => {
+    const fn = mockFetch({ data: { accessToken: "new-jwt", refreshToken: "new-rt", expiresIn: 900 } });
+    const res = await refresh({ ...base, refreshToken: "old-rt" });
+
+    const [url, init] = fn.mock.calls[0];
+    expect(url).toBe("https://auth.example.test/v1/auth/refresh");
+    const i = init as RequestInit;
+    expect(i.headers).toMatchObject({ "X-Tenant-ID": "tenant-1" });
+    expect(JSON.parse(i.body as string)).toEqual({ refreshToken: "old-rt" });
+    expect(res).toEqual({ accessToken: "new-jwt", refreshToken: "new-rt", expiresIn: 900 });
+  });
+
+  it("throws ApiError with status on non-2xx", async () => {
+    mockFetch({ message: "refresh token expired" }, false, 401);
+    await expect(refresh({ ...base, refreshToken: "expired" })).rejects.toMatchObject({
+      statusCode: 401,
+      apiMessage: "refresh token expired",
+    });
+  });
+});
+
+describe("auth-client logout", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs with Bearer + tenant header", async () => {
+    const fn = mockFetch("", true, 204);
+    await logout({ ...base, accessToken: "jwt-xyz" });
+    const [url, init] = fn.mock.calls[0];
+    expect(url).toBe("https://auth.example.test/v1/auth/logout");
+    expect((init as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer jwt-xyz",
+      "X-Tenant-ID": "tenant-1",
+    });
+  });
+
+  it("throws ApiError on non-2xx", async () => {
+    mockFetch("nope", false, 500);
+    await expect(logout({ ...base, accessToken: "jwt-xyz" })).rejects.toBeInstanceOf(ApiError);
   });
 });
