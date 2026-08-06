@@ -22,6 +22,31 @@ function isMcpPath(path: string): boolean {
   return path === "/mcp" || path.startsWith("/mcp/");
 }
 
+// Pull a human-readable message out of an error response body. The backend
+// wraps errors as { success:false, error:{ id, code, status, message }, message }
+// so a naive `data.error` yields the object itself (rendered "[object Object]").
+// Prefer error.message, then the top-level message, then a bare string body.
+function extractApiErrorMessage(data: unknown, statusText: string): string {
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    const err = d.error;
+    if (typeof err === "string" && err) return err;
+    if (err && typeof err === "object") {
+      const m = (err as Record<string, unknown>).message;
+      if (typeof m === "string" && m) return m;
+    }
+    if (typeof d.message === "string" && d.message) return d.message;
+  }
+  if (typeof data === "string" && data) return data;
+  return statusText;
+}
+
+// Per-request overrides. `timeoutMs` lets callers widen the abort window for
+// requests known to run long server-side (e.g. media commit content-probing).
+export interface RequestOptions {
+  timeoutMs?: number;
+}
+
 // HTTP client for AgentBrain API with auth, error handling, and SSE streaming
 export class ApiClient {
   private baseUrl: string;
@@ -59,8 +84,8 @@ export class ApiClient {
     return this.request<T>("GET", path, undefined, params);
   }
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("POST", path, body);
+  async post<T>(path: string, body?: unknown, opts?: RequestOptions): Promise<T> {
+    return this.request<T>("POST", path, body, undefined, opts);
   }
 
   async put<T>(path: string, body?: unknown): Promise<T> {
@@ -214,11 +239,12 @@ export class ApiClient {
     return url.toString();
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, params?: Record<string, string>): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, params?: Record<string, string>, opts?: RequestOptions): Promise<T> {
     const url = this.buildUrl(path, params);
     const bodyStr = body ? JSON.stringify(body) : undefined;
+    const timeout = opts?.timeoutMs ?? this.timeout;
 
-    let response = await this.doFetch(method, url, path, bodyStr);
+    let response = await this.doFetch(method, url, path, bodyStr, timeout);
 
     // On 401 for a bearer-auth path, try one silent refresh + retry. The
     // refresh path itself is gated: we only attempt it when a refreshToken +
@@ -227,7 +253,7 @@ export class ApiClient {
     if (response.status === 401 && !isMcpPath(path) && this.canRefresh()) {
       const refreshed = await this.tryRefresh();
       if (refreshed) {
-        response = await this.doFetch(method, url, path, bodyStr);
+        response = await this.doFetch(method, url, path, bodyStr, timeout);
       }
     }
 
@@ -263,14 +289,14 @@ export class ApiClient {
     }
   }
 
-  private async doFetch(method: string, url: string, path: string, body: string | undefined): Promise<Response> {
+  private async doFetch(method: string, url: string, path: string, body: string | undefined, timeout: number): Promise<Response> {
     const headers = { ...this.baseHeaders(), ...this.authHeaders(path) };
     const start = Date.now();
 
     if (this.verbose) console.error(`${method} ${url}`);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(url, { method, headers, body, signal: controller.signal });
       if (this.verbose) {
@@ -280,7 +306,7 @@ export class ApiClient {
       return response;
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        throw new ApiError(408, `Request timed out after ${this.timeout}ms`);
+        throw new ApiError(408, `Request timed out after ${timeout}ms`);
       }
       throw err;
     } finally {
@@ -298,10 +324,7 @@ export class ApiClient {
     }
 
     if (!response.ok) {
-      const msg = (data as Record<string, unknown>)?.error ??
-        (data as Record<string, unknown>)?.message ??
-        response.statusText;
-      throw new ApiError(response.status, String(msg), data);
+      throw new ApiError(response.status, extractApiErrorMessage(data, response.statusText), data);
     }
 
     // Unwrap envelope if present: { data: T } -> T

@@ -96,6 +96,23 @@ describe("ApiClient path guard + envelope unwrap", () => {
     const c = new ApiClient(cfg({ token: "t" }));
     await expect(c.get("/cms/x")).rejects.toMatchObject({ statusCode: 422, apiMessage: "boom" });
   });
+
+  it("extracts the message from a structured error envelope (not [object Object])", async () => {
+    // Backend shape: { success:false, error:{ id, code, status, message }, message }
+    mockFetch(
+      { success: false, error: { id: "payload_too_large", code: 413, message: "media: payload too large" }, message: "media: payload too large" },
+      false,
+      413
+    );
+    const c = new ApiClient(cfg({ token: "t" }));
+    await expect(c.get("/cms/x")).rejects.toMatchObject({ statusCode: 413, apiMessage: "media: payload too large" });
+  });
+
+  it("falls back to the top-level message when error is not a string", async () => {
+    mockFetch({ error: {}, message: "top-level detail" }, false, 400);
+    const c = new ApiClient(cfg({ token: "t" }));
+    await expect(c.get("/cms/x")).rejects.toMatchObject({ statusCode: 400, apiMessage: "top-level detail" });
+  });
 });
 
 describe("ApiClient silent refresh on 401", () => {
