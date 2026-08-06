@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { addGlobalOptions } from "./utils/global-options.js";
 import { registerConfigCommand } from "./commands/config-command.js";
+import { registerAuthCommand } from "./commands/auth-command.js";
 import { registerOrgCommand } from "./commands/org-command.js";
 import { registerConnectorCommand } from "./commands/connector-command.js";
 import { registerConnectorSubtypeCommand } from "./commands/connector-subtype-command.js";
@@ -42,6 +43,7 @@ export function buildProgram(): Command {
 
   // Existing command groups
   registerConfigCommand(program);
+  registerAuthCommand(program);
   registerOrgCommand(program);
   registerConnectorCommand(program);
   registerConnectorSubtypeCommand(program);

@@ -8,7 +8,10 @@ function cfg(over: Partial<AgentBrainConfig> = {}): AgentBrainConfig {
     apiUrl: "https://api.example.test",
     apiKey: "",
     token: "",
+    refreshToken: "",
     orgId: "",
+    authUrl: "https://auth.example.test",
+    tenantId: "",
     output: "json",
     timeout: 5000,
     ...over,
@@ -109,6 +112,79 @@ describe("ApiClient path guard + envelope unwrap", () => {
     mockFetch({ error: {}, message: "top-level detail" }, false, 400);
     const c = new ApiClient(cfg({ token: "t" }));
     await expect(c.get("/cms/x")).rejects.toMatchObject({ statusCode: 400, apiMessage: "top-level detail" });
+  });
+});
+
+describe("ApiClient silent refresh on 401", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Serve a scripted sequence of fetch responses. Each entry is one Response.
+  function sequence(responses: Array<{ ok: boolean; status: number; body: unknown }>) {
+    let i = 0;
+    const fn = vi.fn(async (_url: string, _init?: RequestInit) => {
+      const r = responses[i++];
+      return {
+        ok: r.ok,
+        status: r.status,
+        statusText: r.ok ? "OK" : "ERR",
+        text: async () => (typeof r.body === "string" ? r.body : JSON.stringify(r.body)),
+      };
+    });
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  it("refreshes on 401, retries the original request, and persists the new pair", async () => {
+    const fn = sequence([
+      { ok: false, status: 401, body: { error: "expired" } },              // 1. /cms/folders — original
+      { ok: true, status: 200, body: { data: { accessToken: "new-jwt", refreshToken: "new-rt" } } }, // 2. /v1/auth/refresh
+      { ok: true, status: 200, body: { data: { id: "42" } } },             // 3. /cms/folders — retry
+    ]);
+    const persisted: Array<{ accessToken: string; refreshToken: string }> = [];
+    const c = new ApiClient(
+      cfg({ token: "old-jwt", refreshToken: "old-rt", authUrl: "https://auth.example.test", tenantId: "t1", orgId: "o1" }),
+      { onTokenRefreshed: (t) => persisted.push(t) }
+    );
+
+    const out = await c.get<{ id: string }>("/cms/folders");
+    expect(out).toEqual({ id: "42" });
+
+    expect(fn).toHaveBeenCalledTimes(3);
+    // Original 401 sent old JWT
+    expect((fn.mock.calls[0][1] as RequestInit).headers).toMatchObject({ Authorization: "Bearer old-jwt" });
+    // Refresh call hit the auth service with the old refreshToken
+    expect(fn.mock.calls[1][0]).toBe("https://auth.example.test/v1/auth/refresh");
+    expect(JSON.parse((fn.mock.calls[1][1] as RequestInit).body as string)).toEqual({ refreshToken: "old-rt" });
+    // Retry carried the new JWT
+    expect((fn.mock.calls[2][1] as RequestInit).headers).toMatchObject({ Authorization: "Bearer new-jwt" });
+    // Persistence callback fired with rotated pair
+    expect(persisted).toEqual([{ accessToken: "new-jwt", refreshToken: "new-rt" }]);
+  });
+
+  it("does not attempt refresh when refreshToken is missing", async () => {
+    const fn = sequence([{ ok: false, status: 401, body: { error: "expired" } }]);
+    const c = new ApiClient(cfg({ token: "old-jwt", authUrl: "https://a.test", tenantId: "t1" }));
+    await expect(c.get("/cms/folders")).rejects.toMatchObject({ statusCode: 401 });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh for /mcp paths (they use X-API-Key, not the JWT)", async () => {
+    const fn = sequence([{ ok: false, status: 401, body: { error: "bad key" } }]);
+    const c = new ApiClient(
+      cfg({ apiKey: "sk", refreshToken: "rt", authUrl: "https://a.test", tenantId: "t1" })
+    );
+    await expect(c.get("/mcp/retrieve-context")).rejects.toMatchObject({ statusCode: 401 });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the original 401 when refresh itself fails", async () => {
+    const fn = sequence([
+      { ok: false, status: 401, body: { error: "expired" } },
+      { ok: false, status: 401, body: { message: "refresh token invalid" } }, // refresh fails
+    ]);
+    const c = new ApiClient(cfg({ token: "old", refreshToken: "old-rt", authUrl: "https://a.test", tenantId: "t1" }));
+    await expect(c.get("/cms/folders")).rejects.toMatchObject({ statusCode: 401, apiMessage: "expired" });
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });
 

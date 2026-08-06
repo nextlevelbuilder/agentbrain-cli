@@ -1,12 +1,15 @@
 import { Command } from "commander";
-import { getConfig } from "../config/config-manager.js";
+import { getConfig, setConfigValue } from "../config/config-manager.js";
 import { AgentBrainConfig } from "../config/config-schema.js";
 import { ApiClient } from "../client/http-client.js";
 import { ApiError, formatApiError } from "../client/api-error.js";
 import { resolveOutputFormat, printOutput, TableColumnDef } from "../formatters/output-formatter.js";
 import { getGlobalOptions } from "./global-options.js";
 
-// Create ApiClient from resolved config + CLI overrides
+// Create ApiClient from resolved config + CLI overrides. Registers a
+// persistence callback so a silent refresh writes the rotated token pair back
+// to ~/.agentbrain/config.json — without it, the next command would still see
+// the invalidated refreshToken and fail.
 export function createClient(cmd: Command): { client: ApiClient; config: AgentBrainConfig } {
   const opts = getGlobalOptions(cmd);
   const config = getConfig({
@@ -15,7 +18,13 @@ export function createClient(cmd: Command): { client: ApiClient; config: AgentBr
     token: opts.token,
     orgId: opts.org,
   });
-  const client = new ApiClient(config, opts.verbose);
+  const client = new ApiClient(config, {
+    verbose: opts.verbose,
+    onTokenRefreshed: ({ accessToken, refreshToken }) => {
+      setConfigValue("token", accessToken);
+      setConfigValue("refreshToken", refreshToken);
+    },
+  });
   return { client, config };
 }
 

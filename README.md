@@ -31,11 +31,23 @@ AgentBrain uses **two credentials** depending on which surface you call:
 
 Every request also sends your organization ID (`orgId`) as the `X-Org-Id` header.
 
-> **Breaking change (upgrading from an apiKey-only setup):** admin/CMS commands now require a **bearer token** (`token`), not the API key. The API key still authenticates the MCP-surface commands listed above. If you previously configured only `apiKey`, set `token` as well:
->
-> ```bash
-> agentbrain config set token <your-jwt>
-> ```
+> **Breaking change (upgrading from an apiKey-only setup):** admin/CMS commands now require a **bearer token** (`token`), not the API key. The API key still authenticates the MCP-surface commands listed above. If you previously configured only `apiKey`, set `token` as well.
+
+The bearer JWT is short-lived, so instead of pasting it manually use the `auth` command group:
+
+```bash
+agentbrain auth login                        # prompts email + password (hidden)
+agentbrain auth login --email you@example.com
+agentbrain auth status                       # verify who you're logged in as
+agentbrain auth logout                       # revoke + clear stored tokens
+```
+
+`auth login` authenticates against the **Builder Auth** service — a separate service from the hub `apiUrl` — and stores both the access token (as `token`) and the refresh token (as `refreshToken`) in `~/.agentbrain/config.json` (mode `0600`). It needs two settings, resolvable from config, env, or flags:
+
+- `authUrl` — Builder Auth base URL (defaults to the cloud auth service; `--auth-url` / `AGENTBRAIN_AUTH_URL` to override)
+- `tenantId` — your deployment's tenant ID (`--tenant` / `AGENTBRAIN_TENANT_ID`; prompted if unset)
+
+**Silent refresh:** once you're logged in, admin commands will silently refresh the access token via `/v1/auth/refresh` when they hit a `401`, retry once, and write the rotated pair back to your config. You should not need to re-run `auth login` until the refresh token itself expires. Username-based deployments use `agentbrain auth login --username <name>`.
 
 ## Quick Start
 
@@ -242,9 +254,12 @@ agentbrain config set timeout 60000
 Supported config keys:
 
 - `apiUrl` — API endpoint (default: https://api.agentbrain.sh)
-- `token` — bearer JWT for admin/CMS commands
+- `token` — bearer JWT for admin/CMS commands (set automatically by `agentbrain auth login`; masked in `config list`)
+- `refreshToken` — refresh token for silent access-token rotation (set automatically by `auth login`; masked in `config list`)
 - `apiKey` — API key for MCP-surface commands (`retrieve-context`, `connector query`/`execute`, `governance ai-policy`)
 - `orgId` — default organization ID
+- `authUrl` — Builder Auth service base URL used by `auth login` and silent refresh (default: cloud auth service)
+- `tenantId` — Builder Auth tenant ID used by `auth login` and silent refresh
 - `output` — output format: json, table, yaml (default: table for TTY, json for pipes)
 - `timeout` — request timeout in ms (default: 30000)
 
