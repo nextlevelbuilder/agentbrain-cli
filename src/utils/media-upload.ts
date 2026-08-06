@@ -12,6 +12,18 @@ export const MAX_UPLOAD_BYTES = 500_000_000;
 // backend (which HEAD-validates size authoritatively) is rarely worth the I/O.
 export const SHA256_DEFAULT_MAX_BYTES = 100_000_000;
 
+// Floor for the commit timeout so even small uploads tolerate a slow probe.
+const COMMIT_TIMEOUT_FLOOR_MS = 60_000;
+// Extra window granted per megabyte to cover backend content-probing that
+// streams the object from storage (observed ~50s for a 300MB media asset).
+const COMMIT_TIMEOUT_MS_PER_MB = 1_000;
+
+// Size-scaled abort window for the commit step. Kept generous because it only
+// caps a request that returns as soon as the backend finishes probing.
+export function commitTimeoutMs(sizeBytes: number): number {
+  return Math.max(COMMIT_TIMEOUT_FLOOR_MS, Math.ceil(sizeBytes / 1_000_000) * COMMIT_TIMEOUT_MS_PER_MB);
+}
+
 // Media asset kind accepted by the presign endpoint.
 export type MediaKind = "audio" | "video" | "image" | "raw_doc";
 
@@ -150,15 +162,22 @@ export async function uploadMedia(client: ApiClient, opts: UploadOptions): Promi
 
   let commit: CommitResponse;
   try {
-    commit = await client.post<CommitResponse>("/cms/media/uploads/commit", {
-      assetId: presign.assetId,
-      sha256,
-      contentType,
-    });
+    commit = await client.post<CommitResponse>(
+      "/cms/media/uploads/commit",
+      { assetId: presign.assetId, sha256, contentType },
+      // Commit runs backend-side content probing (media kinds stream the whole
+      // object from storage through ffprobe), which scales with file size and
+      // routinely exceeds the default 30s request timeout for large media.
+      // Give commit a size-scaled window so a slow-but-succeeding commit is not
+      // aborted (leaving the asset stuck in "uploaded").
+      { timeoutMs: commitTimeoutMs(sizeBytes) }
+    );
   } catch (err) {
-    // 409 = asset already committed (e.g. a retried commit). Treat as success.
+    // 409 = asset already committed (e.g. a retried commit). Treat as success,
+    // reusing the asset payload the backend echoes in the 409 body when present.
     if (err instanceof ApiError && err.statusCode === 409) {
-      commit = { assetId: presign.assetId, status: "ready", objectKey: "" };
+      const echoed = (err.details as { data?: CommitResponse } | undefined)?.data;
+      commit = echoed ?? { assetId: presign.assetId, status: "ready", objectKey: "" };
     } else {
       throw err;
     }
