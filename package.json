@@ -1,5 +1,5 @@
 {
-  "name": "agentbrain",
+  "name": "agentbrain-cli",
   "version": "1.0.0",
   "description": "CLI for AgentBrain enterprise data hub - interact with organizations, connectors, knowledge bases, and workflows",
   "type": "module",
