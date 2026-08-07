@@ -44,10 +44,17 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      # npm CLI >= 11.5.1 detects the GitHub Actions OIDC token via
+      # ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN and, when a matching Trusted
+      # Publisher is configured for the package on npmjs.com, exchanges it
+      # for a short-lived publish credential — no NPM_TOKEN needed. The Node
+      # 22 image ships npm 10.x, so pin a newer one here.
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Attach sigstore provenance to the published tarball.
+          NPM_CONFIG_PROVENANCE: "true"
         run: npx semantic-release
